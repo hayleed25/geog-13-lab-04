@@ -1,0 +1,202 @@
+---
+title: "Geography 13"
+author: "[Haylee Damron](https://github.com/hayleed25)"
+subtitle: 'Lab 03: Distances and the Border Zone'
+output:
+  html_document:
+    theme: journal
+    
+---
+#Libraries
+```{r}
+library(tidyverse)
+library(sf)
+library(USAboundaries)
+library(ggplot2)
+library(gghighlight)
+library(leaflet)
+library(knitr)
+library(readxl)
+library(rmapshaper)
+library(units)
+library(dplyr)
+library(leafpop)
+```
+
+#Question 1
+```{r,echo=FALSE, results='asis', message = FALSE, error = FALSE, warning= FALSE}
+counties <- USAboundaries::us_counties() %>% 
+  filter(!state_name %in% c("Hawaii", "Puerto Rico", "Alaska", "Guam")) %>% 
+  st_transform(5070) %>% 
+  st_as_sf() %>% 
+  mutate(id = 1:n())
+
+centroids <- counties %>% 
+  st_centroid()
+nrow(centroids)
+
+cent_union <- centroids %>% 
+  st_union()
+cent_union
+
+boundary <- counties %>% 
+  st_union() %>% 
+  ms_simplify(keep = .025)
+mapview::npts
+  
+voronois <- st_voronoi(cent_union) %>% 
+  st_cast() %>% 
+  st_as_sf() %>% 
+  mutate(id = 1:n()) %>% 
+  st_intersection(boundary)
+
+triangulate = st_triangulate(cent_union) %>% 
+  st_cast() %>% 
+  st_as_sf() %>% 
+  mutate(id = 1:n()) %>% 
+  st_intersection(boundary)
+
+sqgrid = st_make_grid(cent_union, n = c(70)) %>% 
+  st_cast() %>% 
+  st_as_sf() %>% 
+  mutate(id = 1:n()) %>% 
+  st_intersection(boundary)
+
+hex_grid = st_make_grid(counties, n = c(70), square = FALSE) %>% 
+  st_as_sf() %>% 
+  mutate(id = 1:n()) %>% 
+  st_intersection(boundary)
+
+plot_tess = function(data, title){
+  ggplot() + 
+    geom_sf(data = data, fill = "white", col = "navy", size = .2) +   
+    theme_void() +
+    labs(title = title, caption = paste("This tesselation has:", nrow(data), "tiles" )) +
+    theme(plot.title = element_text(hjust = .5, color =  "navy", face = "bold"))
+}
+
+plot_tess(voronois, "Voroni Coverage")
+plot_tess(triangulate, "Triangulated Coverage")
+plot_tess(sqgrid, "Square Coverage")
+plot_tess(hex_grid, "Hexagonal Coverage")
+plot_tess(counties, "Original Counties")
+```
+
+#Question 2
+```{r,echo=FALSE, results='asis', message = FALSE, error = FALSE, warning= FALSE}
+tess = function(data, description){
+  area = st_area(data)
+  area = set_units(area, "km^2")
+  area = as.numeric(area)
+  data.frame(attributes = c("Description", "Num of Features", "Mean Area Features", "Standard Deviation", "Tot Area"), values = c(description, mapview::npts(data), sd(area), mean(area), sum(area)))
+}
+
+tess(triangulate, "Original Centroids")
+tess(voronois, "Voronoi Coverage")
+tess(sqgrid, "Square Coverage")
+tess(hex_grid, "Hexagonal Coverage")
+
+tess_summary = bind_rows(
+  tess(triangulate ,"triangulation"),
+  tess(voronois, "voroni"))
+cov_summary = bind_rows(
+  tess(sqgrid, "square grid"),
+  tess(hex_grid, "hexagonal grid"))
+count_summmary = bind_rows(
+  tess(counties, "counties"))
+knitr::kable(tess_summary, caption = "Bound Rows")
+knitr::kable(cov_summary, caption = "Bound Rows")
+knitr::kable(count_summmary, caption = "Bound Rows")
+```
+
+#Question 3
+```{r,echo=FALSE, results='asis', message = FALSE, error = FALSE, warning= FALSE}
+NID <- read_excel("../data/NID2019_U.xlsx") %>% 
+  filter(!is.na(LONGITUDE)) %>% 
+  filter(!is.na(LATITUDE)) %>% 
+  st_as_sf(coords = c("LONGITUDE", "LATITUDE"), crs = 4326) %>% 
+  st_transform(5070)
+
+PIP <- function(points, polygons, id){
+  st_join(polygons, points) %>% 
+    dplyr::count(.data[[id]])
+}
+
+
+NIDV = PIP(NID, voronois, "id")
+NIDT = PIP(NID, triangulate, "id")
+NIDS = PIP(NID, sqgrid, "id")
+NIDH = PIP(NID, hex_grid, "id")
+NIDC = PIP(NID, counties, "id")
+
+plot_PIP <- function(data, title){
+  ggplot() +
+    geom_sf(data = data, aes(fill = n), size = 0.2, col = NA) +
+    scale_fill_viridis_c() +
+    theme_void() +
+    labs(title = title, caption = sum(data$n))
+}
+
+plot_PIP(NIDV, "Voronoi Tessellations")
+plot_PIP(NIDT, "Triangulation Tessellations")
+plot_PIP(NIDS, "Square Grid Tessellations")
+plot_PIP(NIDH, "Hexagonal Tesssellations")
+plot_PIP(NIDC, "Counties")
+
+# Further on, I will be using NIDV (the voroni tessellations), because I like the shape of them
+```
+
+# Question 4
+```{r,echo=FALSE, results='asis', message = FALSE, error = FALSE, warning= FALSE}
+# I picked hydroelectric, irrigation, flood control, and water supply
+
+NIDHYDRO = NID %>% 
+  dplyr::filter(grepl("H", NID$PURPOSES))
+hydro_pip = PIP(NIDHYDRO, voronois, "id")
+
+NIDIR = NID %>% 
+  dplyr::filter(grepl("I", NID$PURPOSES))
+ir_pip = PIP(NIDIR, voronois, "id")
+
+NIDFC = NID %>% 
+  dplyr::filter(grepl("C", NID$PURPOSES))
+fc <- PIP(NIDFC, voronois, "id")
+
+NIDWS = NID %>% 
+  dplyr::filter(grepl("S", NID$PURPOSES))
+ws <- PIP(NIDWS, voronois, "id")
+
+plot_PIP(hydro_pip, "Hydroeletric Voroni Tessellation")
+plot_PIP(ir_pip, "Irrigation Voroni Tessellation")
+plot_PIP(fc, "Flood Control Voroni Tessellation")
+plot_PIP(ws, "Water Supply Voroni Tessellation")
+```
+# Extra Credit
+```{r,echo=FALSE, results='asis', message = FALSE, error = FALSE, warning= FALSE}
+mississippi <- USAboundaries::us_states() %>% 
+  filter(state_name %in% "Mississippi")
+
+read_sf("../data/rivers")
+
+dams = read_excel("../data/NID2019_U.xlsx") %>% 
+    filter(!is.na(LONGITUDE), !is.na(LATITUDE)) %>% 
+    st_as_sf(coords = c("LONGITUDE", "LATITUDE"), crs = 4326)
+plot(dams)
+largest <- dams %>% 
+  filter(!STATE %in% c("Hawaii", "Puerto Rico", " Alaska", "Guam")) %>% 
+  slice_max(NID_STORAGE, n = 1) %>% 
+  dplyr::select("DAM_NAME", "NID_STORAGE", "PURPOSES", "YEAR_COMPLETED")
+
+leaflet() %>% 
+  addProviderTiles(providers$CartoDB) %>% 
+  addPolylines(data = mississippi) %>% 
+  addCircleMarkers(data = largest,
+                   radius = ~NID_STORAGE / 1500000,
+                   color = "red",
+                   fillOpacity = 1, 
+                   stroke = FALSE, 
+                   popup = leafpop::popupTable(st_drop_geometry(largest[1:4]),
+                                               feature.id = FALSE, row.numbers = FALSE))
+
+```
+
